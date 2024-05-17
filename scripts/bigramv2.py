@@ -16,9 +16,9 @@ FILE_PATH = PATH_DIR / FILE_NAME
 ## the main hyperparameters
 batch_size = 32
 block_size = 8
-learning_rate = 1e-2
-evaluation_interval = 300
-epochs = 3000
+learning_rate = 1e-3
+evaluation_interval = 500
+epochs = 5000
 num_embedding = 32
 head_size = 16
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -82,6 +82,28 @@ class Head(nn.Module):
         v = self.value(x) ## (B, T, C)
         out = weight @ v ## (B, T, C)
         return out
+    
+## in order to improve our model furthur
+## we can have multiple heads
+class MultiHeadAttention(nn.Module):
+    def __init__(self, num_heads, head_size):
+        super().__init__()
+        self.heads = nn.ModuleList([Head(head_size=head_size) for _ in range(num_heads)])
+
+    def forward(self, x):
+        return torch.cat([h(x) for h in self.heads], dim=-1) ## concat over channel/vocab/n_embd dimension
+
+## now we need a linear model with some non_linearity
+class FeedForward(nn.Module):
+    def __init__(self, num_emb = num_embedding):
+        super().__init__()
+        self.lin = nn.Sequential(
+            nn.Linear(num_emb, num_emb),
+            nn.ReLU()
+        )
+    def forward(self, x):
+        return self.lin(x)
+
 
 ## next we have to build our model
 class BigramLanguageModel(nn.Module):
@@ -94,7 +116,7 @@ class BigramLanguageModel(nn.Module):
         ## and then have another embedding for positions of the token
         self.pos_embedding_table = nn.Embedding(block_size, num_emb)
         ## we have to create a head in here now
-        self.head = Head(head_size=num_emb, num_embd=num_emb)
+        self.head = MultiHeadAttention(num_heads=4, head_size=num_emb//4)
         ## we also need a linear layer to go from token to logits
         self.lin_head = nn.Linear(num_emb, vocab_size)
 
