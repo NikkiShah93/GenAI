@@ -86,24 +86,43 @@ class Head(nn.Module):
 ## in order to improve our model furthur
 ## we can have multiple heads
 class MultiHeadAttention(nn.Module):
-    def __init__(self, num_heads, head_size):
+    def __init__(self, num_heads, head_size, num_emb=num_embedding):
         super().__init__()
         self.heads = nn.ModuleList([Head(head_size=head_size) for _ in range(num_heads)])
-
+        self.proj = nn.Linear(num_emb, num_emb)
     def forward(self, x):
-        return torch.cat([h(x) for h in self.heads], dim=-1) ## concat over channel/vocab/n_embd dimension
+        out = torch.cat([h(x) for h in self.heads], dim=-1) ## concat over channel/vocab/n_embd dimension
+        out = self.proj(out)
+        return out
 
 ## now we need a linear model with some non_linearity
 class FeedForward(nn.Module):
     def __init__(self, num_emb = num_embedding):
         super().__init__()
         self.lin = nn.Sequential(
-            nn.Linear(num_emb, num_emb),
-            nn.ReLU()
+            nn.Linear(num_emb, 4 * num_emb),
+            nn.ReLU(),
+            nn.Linear(4 * num_emb, num_emb) ## this is the projection layer
         )
     def forward(self, x):
         return self.lin(x)
 
+## this class will be the transformer block
+## which lets communication followed by computation
+class Block(nn.Module):
+    def __init__(self, num_embd, num_head):
+        super().__init__()
+        head_size = num_embd // num_head
+        self.multi_head = MultiHeadAttention(num_heads=num_head,head_size=head_size)
+        self.ff = FeedForward(num_emb=num_embd)
+
+    def forward(self, x):
+        ## we have to do the MultiHead's forward path on our x
+        x = x + self.multi_head(x)
+        ## and then apply the feed forward on x
+        ## which in a sense, give the tokens time to think on what they've gathered
+        x = x + self.ff(x)
+        return x 
 
 ## next we have to build our model
 class BigramLanguageModel(nn.Module):
@@ -115,8 +134,12 @@ class BigramLanguageModel(nn.Module):
         self.embedding_table = nn.Embedding(vocab_size, num_emb)
         ## and then have another embedding for positions of the token
         self.pos_embedding_table = nn.Embedding(block_size, num_emb)
-        ## we have to create a head in here now
-        self.head = MultiHeadAttention(num_heads=4, head_size=num_emb//4)
+        self.block = nn.Sequential(
+            Block(num_embd=num_emb, num_head=4),
+            Block(num_embd=num_emb, num_head=4),
+            Block(num_embd=num_emb, num_head=4),
+            Block(num_embd=num_emb, num_head=4)
+        )
         ## we also need a linear layer to go from token to logits
         self.lin_head = nn.Linear(num_emb, vocab_size)
 
@@ -127,8 +150,7 @@ class BigramLanguageModel(nn.Module):
         ## and we add the emb for the identity of the token
         ## and its position in the block
         x = token_emb + pos_emb ## (B, T, num_emb)
-        ## we have to do the Head's forward path on our x
-        x = self.head(x)
+        x = self.block(x)
         logits = self.lin_head(x) ## (B, T, vocab)
         if target is None:
             loss = None
